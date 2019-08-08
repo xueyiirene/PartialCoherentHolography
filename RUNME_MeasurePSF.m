@@ -1,0 +1,274 @@
+%  function_Stop_stage(Stage);
+
+clear all;close all;clc
+%%
+[ Setup ] = Function_Load_Parameters();
+TheName = 'Blu_PSF_2_';
+
+Test.duration = 10;%Unit: second;
+STest.duration=1;
+EngraveVoltage = 10; %Voltage to supply to laser for recording
+VisualizeVoltage = 10;  %Voltage to supply to laser for recording
+Result.Zrange = 300; % In microns, range of Zstack
+Result.Nsteps = 200; % Number of slices in Z stack
+
+Result.DefocusingRadius = [-200,-100,0,100,200];  %Radius for defocusing
+Result.TargetRadius = 5*ones(size(Result.DefocusingRadius)); %Radius of the target
+x=zeros(size(Result.DefocusingRadius));
+y=zeros(size(Result.DefocusingRadius));
+
+% Compute frames and DAQ outputs for one cycle
+[Result.DMDFrames,Result.TotalFrame] =  function_makespots(Setup,x,y,Result.DefocusingRadius,Result.TargetRadius);
+
+%If needed to visualize
+imagesc(Result.TotalFrame);
+
+[ UT,Output, Subclock ] = function_makeCycleClock( Setup );
+%Load frames on DMD
+function_feed_DMD( Result.DMDFrames );
+%% initialization DMD
+for i=1:4
+    outputSingleScan(Setup.Daq,[2,0,0,0,rem(i,2),rem(i,2)]);
+end
+% Output(:,1)=2;
+% NumberCycles =1000;
+% LOutput = repmat(Output,[NumberCycles 1]);
+% LOutput(end,:)=0;
+%%
+ queueOutputData(Setup.Daq,LOutput);
+ startBackground(Setup.Daq);
+
+%% Adjust Output and generate LOutput
+Setup.AsymetryMatrix=[1,0.9;0.1,1];
+Setup.PointCloud.phiDMD=-pi*0.24; %DMD start phase (DMD only);-0.23*pi;
+[ Setup ] = Function_Load_Parameters();
+[ UT,Output, Subclock ] = function_makeCycleClock( Setup );
+ Output(1:end,5)=Output(1:end,6);
+ Output(1:end-1,5)=1;
+ Output(1:end,1)=Output(1:end,5)*2;
+ Output(1:end,2)=Output(1:end,5)*0;
+ NumberCycles =5000;
+ LOutput = repmat(Output,[NumberCycles 1]);
+ LOutput(end,:)=0;
+ LOutput(:,1)=LOutput(:,1)*2;
+ 
+ 
+%   queueOutputData(Setup.Daq,LOutput);
+%  startBackground(Setup.Daq);
+
+%% control stage: remember to TURN-OFF stage afterwards!
+[ Stage ] = function_Start_stage( Setup.MechStageComport );
+function_Zero_stage( Stage );
+%%
+Ystageoffset=0;
+Zstageoffset=0;
+position = [0 Ystageoffset Zstageoffset]; function_Goto_stage( Stage,position );
+
+[ cam,Parameters ] = function_StartCam( );
+ZDepths = linspace(-Result.Zrange,Result.Zrange,101)+Zstageoffset;
+ImageMax=zeros(1024/2,1280/2,length(ZDepths));
+position = [0 0 ZDepths(1)];
+function_Goto_stage( Stage,position );pause(0.5);
+outputSingleScan(Setup.Daq,[0,0,Output(1,3),Output(1,4),0,0]);
+BG=squeeze(mean(function_GetFrameCam( cam,Parameters,1),3));
+
+% forceGalvoZero=0;
+% if forceGalvoZero==1
+% %     Outputraw=Output;
+%     Output(:,3:4)=0;
+% else
+%     Output= Outputraw;
+% end
+
+for ii=1:length(ZDepths)
+    % Move stage
+    tic;
+    position = [0 Ystageoffset ZDepths(ii)]; 
+    function_Goto_stage( Stage,position );pause(0.5);
+    Sampling=size(Output,1)/10;
+    Image2D=zeros(1024,1280,size(Output,1)/Sampling);%camera frame size
+%     Image2D=zeros(1024,1280);
+    for jj=1:size(Output,1)/Sampling
+        %set voltage
+        if jj==1
+            outputSingleScan(Setup.Daq,[1.2,0,Output(jj,3),Output(jj,4),0,0]);
+            outputSingleScan(Setup.Daq,[1.2,0,Output(jj,3),Output(jj,4),0,1]);
+        else    
+            outputSingleScan(Setup.Daq,[1.2,0,Output((jj-1)*Sampling,3),Output((jj-1)*Sampling,4),0,0]);
+            outputSingleScan(Setup.Daq,[1.2,0,Output((jj-1)*Sampling,3),Output((jj-1)*Sampling,4),0,1]);
+        end
+        %get the image at this scan angle
+        temp = function_GetFrameCam( cam,Parameters,1);
+        Image2D(:,:,jj)=squeeze(mean(temp,3))-BG;%2D image
+%         figure(2);imagesc(Image2D(:,:,jj));drawnow;caxis([0,255]);
+        if jj==1
+            outputSingleScan(Setup.Daq,[0,0,Output(jj,3),Output(jj,4),0,1]);
+        else
+            outputSingleScan(Setup.Daq,[0,0,Output((jj-1)*Sampling,3),Output((jj-1)*Sampling,4),0,1]);
+        end
+    end
+    
+    temp2D=sum(Image2D,3);% sum intensity of each plane
+    ImageMax(:,:,ii)=temp2D(1024/4+50:1024*0.75+49,1280/4:1280*0.75-1);
+    disp(['Finish: ' num2str(ii) '/' num2str(length(ZDepths))]);toc;
+end
+outputSingleScan(Setup.Daq,[0,0,0,0,0,0]);
+function_StopCam(cam);
+
+for i=1:length(ZDepths)
+figure();imagesc(ImageMax(:,:,i));
+ title(['Z=' num2str(ZDepths(i))]);
+ caxis([0 max(ImageMax(:))]);
+ colorbar;drawnow;
+end
+
+w=2;
+ [~,Indmax] = max(ImageMax(:));
+ [Indx,Indy,Indz]=ind2sub(size(ImageMax),Indmax);
+ figure(2);plot(ZDepths,squeeze(mean(mean(ImageMax(Indx-w:Indx+w,Indy-w:Indy+w,:),1),2)));
+%%
+for kk=1:200
+for i=1:10:451
+    outputSingleScan(Setup.Daq,[3,0,Output(i,3),Output(i,4),0,0]);
+end
+end
+%% Prime95 exe
+Zstageoffset=0;Ystageoffset=0;
+[ cam,Parameters ] = function_StartCam( );
+ZDepths = linspace(-Result.Zrange,Result.Zrange,11)+Zstageoffset;
+ImageMax=zeros(1024,1280,length(ZDepths));
+position = [0 0 ZDepths(1)];
+function_Goto_stage( Stage,position );pause(0.5);
+outputSingleScan(Setup.Daq,[0,0,Output(1,3),Output(1,4),0,0]);
+BG=squeeze(mean(function_GetFrameCam( cam,Parameters,1),3));
+
+for ii=1:length(ZDepths)
+    % Move stage
+    tic;
+    position = [0 Ystageoffset ZDepths(ii)]; 
+    function_Goto_stage( Stage,position );pause(0.5);
+    queueOutputData(Setup.Daq,LOutput);
+    startBackground(Setup.Daq);
+    temp = function_GetFrameCam( cam,Parameters,1);
+    Image2D=squeeze(mean(temp,3))-BG;%2D image
+    figure(2);imagesc(Image2D);drawnow;caxis([0,255]);
+    ImageMax(:,:,ii)= Image2D;
+    disp(['Finish: ' num2str(ii) '/' num2str(length(ZDepths))]);
+    toc;
+end
+
+function_StopCam(cam);
+
+for i=1:length(ZDepths)
+figure(1);imagesc(ImageMax(:,:,i));
+ title(['Z=' num2str(ZDepths(i))]);
+ caxis([0 max(ImageMax(:))]);
+ colorbar;drawnow;
+end
+% 
+% %%
+% %Here you wanna align the stage to center
+% %Find substyage camera, put fluorescent slide (spray paint - ask ian) here 
+% 
+% % queueOutputData(Setup.Daq,LOutput);
+% % startBackground(Setup.Daq);
+% [ cam,Parameters ] = function_StartCam( );
+% % function_previewCam( cam,Parameters ); %opens a window to show you how the hologram looks like
+% % function_StopCam(cam);
+% % close all;
+% 
+% % return;
+% %Here we are centered
+% 
+% Output(:,2) = EngraveVoltage*double(Subclock<0.2)/10*3;
+% SNumberCycles = floor(STest.duration/Setup.PointCloud.CycleLength);
+% SOutput = repmat(Output,[SNumberCycles 1]);
+% % SUT = linspace(0,Setup.PointCloud.CycleLength*SNumberCycles,NT*SNumberCycles);
+% SOutput(end,:)=0;
+% 
+% ZDepths = linspace(-Result.Zrange/2,Result.Zrange/2,Result.Nsteps);
+% [ Stage ] = function_Start_stage( Setup.MechStageComport );
+% function_Zero_stage( Stage );
+% % f = figure('Position' ,[20 20 800 800])
+% % pause(0.01)
+% 
+% % position = [0 0 100]; function_Goto_stage( Stage,position ); pause(0.2);
+% %wait(Setup.Daq);  
+% %% measure 3D PSF, galvomirror only
+% for i=1:450
+%     if rem(i,150)==1
+%         position = [0 0 ZDepths(1)]; function_Goto_stage( Stage,position );
+%         temp = function_GetFrameCam( cam,Parameters,1);
+%         temp1=squeeze(mean(temp,3));
+%         if i==1
+%             Data=temp1;
+%         else
+%             Data=cat(3,Data,temp1);
+%         end
+%     else
+%         pause(0.2)
+%     end
+%     outputSingleScan(Setup.Daq,[0,1,LOutput(i,3),LOutput(i,4),1,1]);
+%     disp(i)
+% end
+% %% timer
+% queueOutputData(Setup.Daq,Output_P00_P01);
+% startBackground(Setup.Daq);
+% %%
+% [ Data ] = function_GetFrameCam( cam,Parameters,5);
+% wait(Setup.Daq);
+% Result.Zero = squeeze(mean(mean(Data,4),3));
+% imagesc(Result.Zero);
+% title('Reference')
+% pause(1)
+% 
+% % position = [0 100 0]; function_Goto_stage( Stage,position ); pause(2);
+% % %wait(Setup.Daq);  
+% % queueOutputData(Setup.Daq,SOutput);
+% % startBackground(Setup.Daq);
+% % [ Data ] = function_GetFrameCam( cam,Parameters,5);%return RGB+frames(n), 4-D stack
+% % % wait(Setup.Daq);
+% % Result.HundredMicrons = squeeze(mean(mean(Data,4),3));
+% % imagesc(Result.HundredMicrons);
+% % title('100 Microns')
+% % pause(1)
+% 
+% %First displacement is kinda slow
+% position = [0 0 ZDepths(1)]; function_Goto_stage( Stage,position ); pause(1);
+% 
+% for j = 1:10:Result.Nsteps %Number of Z steps
+% position = [0 0 ZDepths(j)]; function_Goto_stage( Stage,position ); pause(0.2);
+% %wait(Setup.Daq);  
+% queueOutputData(Setup.Daq,SOutput);
+% startBackground(Setup.Daq);
+% [ Data ] = function_GetFrameCam(cam,Parameters,5);
+% wait(Setup.Daq);
+% Data = squeeze(mean(mean(Data,4),3));
+% imagesc(Data);
+% Result.Stack{j} = Data;
+% title(int2str(j));
+% drawnow
+% end
+% 
+% Result.Zaxis = ZDepths;
+% function_StopCam(cam);
+% position = [0 0 0]; function_Goto_stage(Stage,position); pause(0.2);
+% function_Stop_stage(Stage);
+% save([TheName '.mat'],'Result','-v7.3');
+% 
+% [LX,LY] = size(Data);
+% TheData = zeros(LX,LY,Result.Nsteps);
+% for j = 1:Result.Nsteps
+% TheData(:,:,j) = Result.Stack{j};
+% end
+% TheData = TheData-min(TheData(:));
+% TheData = 255*TheData/max(TheData(:));
+% 
+% f = figure('Position' ,[20 20 800 800]);
+% for j = 1:Result.Nsteps
+% imagesc(TheData(:,:,j));
+% caxis([0 255]);
+% pause(0.1);
+% end
+% 
+% saveastiff(uint8(TheData),[TheName '.tif']);
