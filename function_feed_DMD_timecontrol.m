@@ -1,4 +1,4 @@
-function [Setup,sequenceid] = function_feed_DMD(Setup, stack)
+function [Setup] = function_feed_DMD_timecontrol(Setup, sequenceid, stack, illuminatetime)
 % stack: 2560x1600xframes binary data
 Setup.DMD.alp_returnvalue=0;
 if size(stack,1)~=Setup.DMD.LY || size(stack,2)~=Setup.DMD.LX
@@ -7,7 +7,6 @@ end
 %allocate sequences
 bitdepth=1;
 picnum=size(stack,3);
-sequenceid = uint32(0);
 sequenceidptr = libpointer('uint32Ptr', sequenceid);
 [Setup.DMD.alp_returnvalue, sequenceid] = calllib('DMD', 'AlpSeqAlloc', ...
     Setup.DMD.deviceid, bitdepth, picnum, sequenceidptr);
@@ -67,7 +66,7 @@ if Setup.DMD.alp_returnvalue~=0
     Setup.DMD.alp_returnvalue=0;
 end
 %% sequence timing
-Setup.DMD.illuminatetime=Setup.PointCloud.CycleLength/Setup.PointCloud.divider*10^6*0.6;%us
+Setup.DMD.illuminatetime=illuminatetime; %us Setup.PointCloud.CycleLength/Setup.PointCloud.divider*10^6*0.6;%us
 picturetime=0;
 triggerdelay=0;
 triggerpulsewidth=Setup.DMD.illuminatetime+triggerdelay;

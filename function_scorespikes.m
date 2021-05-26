@@ -24,23 +24,22 @@ if Setup.Scorepikes.Method == 1
     %Case where we measure the magnitude of the biggest peak.
 elseif Setup.Scorepikes.Method == 0
     odata = data;
-    
-    baseline = mean(data(1:floor(Fs*Setup.Scorepikes.baselineduration)));
+    k=(mean(data(end-49:end))-mean(data(1:50)))/(numel(data)-1);
+    baseline=k*((1:numel(data))-1)+mean(data(1:50));
+%     baseline = mean(data(1:floor(Fs*Setup.Scorepikes.baselineduration)));
+    if size(data,1)~=size(baseline,1)
+        baseline=baseline';
+    end
     data = data-baseline;
-    nonzerovalues = find(Stim.Output(:,1));
-if numel( nonzerovalues)==0
-    score = 0;
-else
-    cropbegin = nonzerovalues(1);
-    cropend = cropbegin+ floor(Fs*Setup.Scorepikes.Photocurrentwindowduration);
-    cropdata = data(cropbegin:cropend);
-    % blue light = Stim.Output(:,1)
-    %%%%%%%Setup.Scorepikes.Photocurrentwindowduration
-    score = max(abs(cropdata)); 
-end
+
+    if numel( Stim.nonzerovalues)==0
+        score = 0;
+    else
+        %%%%%%Setup.Scorepikes.Photocurrentwindowduration
+        score = max(abs(data)); 
+    end
 
 else
-    %Case where we are being stupid
     disp('Not a valid spike evaluation method')
 end
 end
